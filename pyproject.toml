@@ -1,0 +1,18 @@
+
+[project]
+name = "bct-enrollmentportal"
+version = "1.0.0"
+description = "BCT_EnrollmentPortal - BCT EnrollmentPortal"
+requires-python = ">=3.10"
+dependencies = [
+    "flet==1.0.5"
+]
+
+[dependency-groups]
+dev = [
+    "flet-cli==1.0.5"
+]
+
+[tool.flet]
+org = "com.bct"
+product = "BCT_EnrollmentPortal"
