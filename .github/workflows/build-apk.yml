@@ -1,0 +1,68 @@
+
+name: Build BCT_EnrollmentPortal APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Flutter SDK
+        uses: flutter-actions/setup-flutter@v4
+        with:
+          channel: stable
+          version: "3.44.8"
+
+      - name: Check Flutter
+        run: flutter --version
+
+      - name: Install Python dependencies
+        run: uv sync
+
+      - name: Verify Flet version
+        run: uv run python -c "import flet; print(flet.__version__)"
+
+      - name: Verify app icon
+        run: |
+          if [ ! -f assets/icon.png ]; then
+            echo "App icon not found: assets/icon.png"
+            exit 1
+          fi
+
+      - name: Build APK
+        run: uv run flet build apk --verbose --arch arm64-v8a x86_64
+
+      - name: Find and rename APK
+        run: |
+          APK=$(find build -type f -name "*.apk" -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "APK file not found!"
+            exit 1
+          fi
+
+          cp "$APK" BCT_EnrollmentPortal.apk
+          echo "APK successfully prepared!"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: BCT_EnrollmentPortal-APK
+          path: BCT_EnrollmentPortal.apk
+          if-no-files-found: error
