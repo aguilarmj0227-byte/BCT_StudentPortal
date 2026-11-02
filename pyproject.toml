@@ -1,8 +1,8 @@
 
 [project]
-name = "bct-enrollmentportal"
+name = "bct-studentportal"
 version = "1.0.0"
-description = "BCT_EnrollmentPortal - BCT EnrollmentPortal"
+description = "BCT_StudentPortal - BCT StudentPortal"
 requires-python = ">=3.10"
 dependencies = [
     "flet==1.0.5"
@@ -15,4 +15,4 @@ dev = [
 
 [tool.flet]
 org = "com.bct"
-product = "BCT_EnrollmentPortal"
+product = "BCT_StudentPortal"
