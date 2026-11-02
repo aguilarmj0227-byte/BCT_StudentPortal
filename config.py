@@ -12,7 +12,7 @@ WHITE = "#FFFFFF"
 
 
 def setup_window(page: ft.Page):
-    page.title = "BCT Enrollment Form & Assessment Calculator"
+    page.title = "BCT Student Portal"
     page.window.width = 520
     page.window.height = 850
     page.run_task(page.window.center)
