@@ -1,5 +1,5 @@
 
-name: Build BCT_EnrollmentPortal APK
+name: Build BCT_StudentPortal APK
 
 on:
   workflow_dispatch:
@@ -57,12 +57,12 @@ jobs:
             exit 1
           fi
 
-          cp "$APK" BCT_EnrollmentPortal.apk
+          cp "$APK" BCT_StudentPortal.apk
           echo "APK successfully prepared!"
 
       - name: Upload APK
         uses: actions/upload-artifact@v6
         with:
-          name: BCT_EnrollmentPortal-APK
-          path: BCT_EnrollmentPortal.apk
+          name: BCT_StudentPortal-APK
+          path: BCT_StudentPortal.apk
           if-no-files-found: error
