@@ -1,61 +1,56 @@
+name: Build iOS IPA (unsigned)
 
-name: Build BCT_StudentPortal IPA
-
+# Run it by hand: repo > Actions tab > "Build iOS IPA (unsigned)" > Run workflow
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-
-permissions:
-  contents: read
 
 jobs:
   build-ipa:
-    runs-on: macos-15-intel
-
+    runs-on: macos-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Sync dependencies
-        run: uv sync
-
-      - name: Import Apple signing certificate
-        uses: apple-actions/import-codesign-certs@v7
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
-          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_P12 }}
-          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          flutter-version: "3.44.8"
+          channel: "stable"
 
-      - name: Install provisioning profile
-        uses: apple-actions/download-provisioning-profiles@v6
-        with:
-          bundle-id: com.bct.studentportal
-          profile-type: IOS_APP_STORE
-          issuer-id: ${{ secrets.APPLE_API_ISSUER }}
-          api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
-          api-private-key: ${{ secrets.APPLE_API_KEY_P8 }}
+      - name: Install Flet
+        run: pip install "flet==1.0.4" "flet-cli==1.0.4"
 
-      - name: Build BCT_StudentPortal IPA
+      - name: Verify Flutter setup
+        run: flutter --version && flutter doctor -v
+
+      # Builds the app without Apple code signing. 3uTools signs it later
+      # with your own Apple ID when you install it on the iPhone.
+      - name: Build iOS app (no code signing)
+        env:
+          CI: "true"
+        run: flet build ipa --verbose --flutter-build-args=--no-codesign
+
+      - name: Show what was built
+        if: always()
+        run: find build -maxdepth 7 \( -name ".app" -o -name ".xcarchive" -o -name "*.ipa" \) | head -50
+
+      - name: Package an unsigned IPA
         run: |
-          uv run flet build ipa \
-            --build-number ${{ github.run_number }} \
-            --bundle-id com.bct.studentportal \
-            --ios-export-method app-store-connect \
-            --ios-signing-certificate "Apple Distribution"
+          set -e
+          APP=$(find build -type d -name ".app" -not -path "*simulator" -not -path "Frameworks" | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "No .app was produced - check the 'Build iOS app' step above."
+            exit 1
+          fi
+          echo "Packaging: $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry BCT-StudentPortal-unsigned.ipa Payload
 
-      - name: Upload BCT_StudentPortal IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: BCT_StudentPortal-IPA
-          path: build/ipa/*.ipa
-          if-no-files-found: error
-          retention-days: 7
+          name: BCT-StudentPortal-unsigned-ipa
+          path: BCT-StudentPortal-unsigned.ipa
