@@ -17,6 +17,9 @@ dev = [
 org = "com.bct"
 product = "BCT_StudentPortal"
 
+
 [tool.flet.flutter.pubspec.dependency_overrides]
 device_info_plus = "12.3.0"
+connectivity_plus = "6.1.5"
+
 
