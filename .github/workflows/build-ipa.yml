@@ -1,0 +1,61 @@
+
+name: Build Flet iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Import Apple signing certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+
+      - name: Install provisioning profile
+        uses: apple-actions/download-provisioning-profiles@v6
+        with:
+          bundle-id: com.example.myapp
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.APPLE_API_ISSUER }}
+          api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPLE_API_KEY_P8 }}
+
+      - name: Build IPA
+        run: |
+          uv run flet build ipa \
+            --build-number ${{ github.run_number }} \
+            --bundle-id com.example.myapp \
+            --ios-export-method app-store-connect \
+            --ios-signing-certificate "Apple Distribution"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: flet-ios-ipa
+          path: build/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 7
