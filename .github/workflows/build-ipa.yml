@@ -1,56 +1,55 @@
-name: Build iOS IPA (unsigned)
 
-# Run it by hand: repo > Actions tab > "Build iOS IPA (unsigned)" > Run workflow
+name: Build BCT_StudentPortal iOS Archive
+
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
-  build-ipa:
+  build-ios:
     runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.44.8"
-          channel: "stable"
+          channel: stable
 
       - name: Install Flet
-        run: pip install "flet==1.0.4" "flet-cli==1.0.4"
+        run: pip install "flet==1.0.5" "flet-cli==1.0.5"
 
-      - name: Verify Flutter setup
-        run: flutter --version && flutter doctor -v
-
-      # Builds the app without Apple code signing. 3uTools signs it later
-      # with your own Apple ID when you install it on the iPhone.
-      - name: Build iOS app (no code signing)
-        env:
-          CI: "true"
-        run: flet build ipa --verbose --flutter-build-args=--no-codesign
-
-      - name: Show what was built
-        if: always()
-        run: find build -maxdepth 7 \( -name ".app" -o -name ".xcarchive" -o -name "*.ipa" \) | head -50
-
-      - name: Package an unsigned IPA
+      - name: Verify tools
         run: |
-          set -e
-          APP=$(find build -type d -name ".app" -not -path "*simulator" -not -path "Frameworks" | head -n 1)
-          if [ -z "$APP" ]; then
-            echo "No .app was produced - check the 'Build iOS app' step above."
-            exit 1
-          fi
-          echo "Packaging: $APP"
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          zip -qry BCT-StudentPortal-unsigned.ipa Payload
+          python --version
+          flutter --version
+          flet --version
 
-      - uses: actions/upload-artifact@v4
+      - name: Build unsigned iOS archive
+        run: |
+          flet build ipa --verbose
+
+      - name: Find iOS build output
+        run: |
+          find build -type d -name "*.xcarchive" -print
+          find build -type f -name "*.ipa" -print
+
+      - name: Upload iOS archive
+        uses: actions/upload-artifact@v4
         with:
-          name: BCT-StudentPortal-unsigned-ipa
-          path: BCT-StudentPortal-unsigned.ipa
+          name: BCT_StudentPortal-iOS-Archive
+          path: build/**/*.xcarchive
+          if-no-files-found: error
+          retention-days: 7
