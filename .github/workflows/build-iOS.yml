@@ -55,21 +55,64 @@ jobs:
           pip show flet
           pip show flet-cli
 
-      # 7. Install dependencies
+      # 7. Install project dependencies
       - name: Install project dependencies
         run: |
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
           fi
 
-      # 8. Import Apple Distribution certificate
+      # 8. Verify dependency overrides
+      - name: Verify dependency overrides
+        run: |
+          if [ -f pyproject.toml ]; then
+            grep -A 5 "dependency_overrides" pyproject.toml || true
+          fi
+
+      # 9. Validate Apple certificate
+      - name: Validate Apple P12 Certificate
+        shell: bash
+        env:
+          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+        run: |
+          set -e
+
+          echo "Checking Apple certificate..."
+
+          if [ -z "$P12_BASE64" ]; then
+            echo "ERROR: IOS_CERTIFICATE_P12 is empty."
+            exit 1
+          fi
+
+          if [ -z "$P12_PASSWORD" ]; then
+            echo "ERROR: IOS_CERTIFICATE_PASSWORD is empty."
+            exit 1
+          fi
+
+          echo "$P12_BASE64" | base64 -D \
+            > "$RUNNER_TEMP/certificate.p12"
+
+          if [ ! -s "$RUNNER_TEMP/certificate.p12" ]; then
+            echo "ERROR: Decoded certificate is empty."
+            exit 1
+          fi
+
+          openssl pkcs12 \
+            -in "$RUNNER_TEMP/certificate.p12" \
+            -passin env:P12_PASSWORD \
+            -info -noout
+
+          echo "Apple certificate validation passed."
+
+      # 10. Import Apple Distribution certificate
       - name: Import Apple signing certificate
         uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.IOS_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
 
-      # 9. Download and install provisioning profile
+      # 11. Install provisioning profile
       - name: Install iOS provisioning profile
         uses: apple-actions/download-provisioning-profiles@v6
         with:
@@ -79,11 +122,13 @@ jobs:
           api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPLE_API_KEY_P8 }}
 
-      # 10. Find provisioning profile name
+      # 12. Find provisioning profile
       - name: Get provisioning profile name
         id: profile
         shell: bash
         run: |
+          set -e
+
           PROFILE_PATH=$(find \
             "$HOME/Library/MobileDevice/Provisioning Profiles" \
             "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
@@ -98,16 +143,18 @@ jobs:
           PROFILE_NAME=$(security cms -D -i "$PROFILE_PATH" | \
             /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin)
 
-          echo "Provisioning Profile: $PROFILE_NAME"
+          echo "Provisioning profile found."
+
           echo "profile_name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
 
-      # 11. Clean previous build
+      # 13. Clean previous build
       - name: Clean previous build
         run: |
           rm -rf build
+          rm -rf dist
           mkdir -p dist
 
-      # 12. Build signed iOS IPA
+      # 14. Build signed iOS IPA
       - name: Build iOS IPA
         run: |
           flet build ipa \
@@ -118,40 +165,47 @@ jobs:
             --ios-export-method app-store-connect \
             --build-number "${{ github.run_number }}"
 
-      # 13. Verify IPA output
+      # 15. Debug build output
+      - name: Debug iOS Build Output
+        if: always()
+        run: |
+          echo "===== BUILD DIRECTORY ====="
+          ls -lah build/ || true
+
+          echo "===== IPA FILES ====="
+          find build -type f -name "*.ipa" -print || true
+
+          echo "===== XCARCHIVE FILES ====="
+          find build -type d -name "*.xcarchive" -print || true
+
+      # 16. Verify IPA
       - name: Verify IPA
         shell: bash
         run: |
+          set -e
+
           echo "Searching for generated IPA..."
 
           IPA_PATH=$(find build -type f -name "*.ipa" -print -quit)
 
           if [ -z "$IPA_PATH" ]; then
             echo "ERROR: No IPA file was generated."
-            echo "Checking archive output..."
-
-            find build -type d -name "*.xcarchive" -print || true
-
-            echo "Checking build directory..."
-            find build -maxdepth 5 -print || true
-
+            echo "Check the Xcode archive and export logs."
             exit 1
           fi
 
-          echo "IPA generated successfully:"
-          echo "$IPA_PATH"
+          echo "IPA generated successfully."
 
           cp "$IPA_PATH" dist/BCT_StudentPortal.ipa
 
-          echo "Final IPA:"
           ls -lh dist/BCT_StudentPortal.ipa
 
-      # 14. Verify IPA package
+      # 17. Verify IPA package
       - name: Verify IPA package
         run: |
           unzip -t dist/BCT_StudentPortal.ipa
 
-      # 15. Upload IPA only
+      # 18. Upload IPA only
       - name: Upload iOS IPA
         uses: actions/upload-artifact@v4
         with:
