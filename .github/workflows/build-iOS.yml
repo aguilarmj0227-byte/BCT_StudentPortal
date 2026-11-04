@@ -54,6 +54,7 @@ jobs:
           flet --version
           pip show flet
           pip show flet-cli
+          flet build ipa --help
 
       # 7. Install project dependencies
       - name: Install project dependencies
@@ -62,14 +63,7 @@ jobs:
             pip install -r requirements.txt
           fi
 
-      # 8. Verify dependency overrides
-      - name: Verify dependency overrides
-        run: |
-          if [ -f pyproject.toml ]; then
-            grep -A 5 "dependency_overrides" pyproject.toml || true
-          fi
-
-      # 9. Validate Apple certificate
+      # 8. Validate Apple certificate
       - name: Validate Apple P12 Certificate
         shell: bash
         env:
@@ -80,13 +74,8 @@ jobs:
 
           echo "Checking Apple certificate..."
 
-          if [ -z "$P12_BASE64" ]; then
-            echo "ERROR: IOS_CERTIFICATE_P12 is empty."
-            exit 1
-          fi
-
-          if [ -z "$P12_PASSWORD" ]; then
-            echo "ERROR: IOS_CERTIFICATE_PASSWORD is empty."
+          if [ -z "$P12_BASE64" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "ERROR: Certificate secrets are missing."
             exit 1
           fi
 
@@ -94,7 +83,7 @@ jobs:
             > "$RUNNER_TEMP/certificate.p12"
 
           if [ ! -s "$RUNNER_TEMP/certificate.p12" ]; then
-            echo "ERROR: Decoded certificate is empty."
+            echo "ERROR: Certificate file is empty."
             exit 1
           fi
 
@@ -103,16 +92,16 @@ jobs:
             -passin env:P12_PASSWORD \
             -info -noout
 
-          echo "Apple certificate validation passed."
+          echo "Certificate validation passed."
 
-      # 10. Import Apple Distribution certificate
+      # 9. Import Apple Distribution certificate
       - name: Import Apple signing certificate
         uses: apple-actions/import-codesign-certs@v7
         with:
           p12-file-base64: ${{ secrets.IOS_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
 
-      # 11. Install provisioning profile
+      # 10. Install provisioning profile
       - name: Install iOS provisioning profile
         uses: apple-actions/download-provisioning-profiles@v6
         with:
@@ -122,88 +111,219 @@ jobs:
           api-key-id: ${{ secrets.APPLE_API_KEY_ID }}
           api-private-key: ${{ secrets.APPLE_API_KEY_P8 }}
 
-      # 12. Find provisioning profile
-      - name: Get provisioning profile name
+      # 11. Find and validate provisioning profile
+      - name: Get provisioning profile information
         id: profile
         shell: bash
         run: |
           set -e
 
-          PROFILE_PATH=$(find \
+          PROFILE_PATH=""
+
+          for DIR in \
             "$HOME/Library/MobileDevice/Provisioning Profiles" \
-            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
-            -name "*.mobileprovision" \
-            -print -quit 2>/dev/null || true)
+            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          do
+            if [ -d "$DIR" ]; then
+              PROFILE_PATH=$(find "$DIR" \
+                -name "*.mobileprovision" \
+                -print -quit)
+              [ -n "$PROFILE_PATH" ] && break
+            fi
+          done
 
           if [ -z "$PROFILE_PATH" ]; then
             echo "ERROR: Provisioning profile not found."
             exit 1
           fi
 
-          PROFILE_NAME=$(security cms -D -i "$PROFILE_PATH" | \
-            /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin)
+          security cms -D -i "$PROFILE_PATH" \
+            > "$RUNNER_TEMP/profile.plist"
 
-          echo "Provisioning profile found."
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy \
+            -c "Print :Name" "$RUNNER_TEMP/profile.plist")
+
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy \
+            -c "Print :UUID" "$RUNNER_TEMP/profile.plist")
+
+          PROFILE_TEAM=$(/usr/libexec/PlistBuddy \
+            -c "Print :TeamIdentifier:0" "$RUNNER_TEMP/profile.plist")
+
+          echo "Profile: $PROFILE_NAME"
+          echo "UUID: $PROFILE_UUID"
+          echo "Team: $PROFILE_TEAM"
 
           echo "profile_name=$PROFILE_NAME" >> "$GITHUB_OUTPUT"
+          echo "profile_uuid=$PROFILE_UUID" >> "$GITHUB_OUTPUT"
+
+          if [ "$PROFILE_TEAM" != "${{ secrets.IOS_TEAM_ID }}" ]; then
+            echo "ERROR: Provisioning profile Team ID mismatch."
+            exit 1
+          fi
+
+      # 12. Verify signing identity
+      - name: Check Apple Signing Configuration
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== SIGNING IDENTITIES ====="
+
+          security find-identity -v -p codesigning
+
+          echo "===== PROVISIONING PROFILE ====="
+
+          cat "$RUNNER_TEMP/profile.plist" \
+            | grep -A 2 -E \
+              "application-identifier|ExpirationDate|Name" || true
+
+          echo "===== APP CONFIGURATION ====="
+          echo "Bundle ID: ${{ secrets.IOS_BUNDLE_ID }}"
+          echo "Team ID: ${{ secrets.IOS_TEAM_ID }}"
 
       # 13. Clean previous build
       - name: Clean previous build
         run: |
           rm -rf build
           rm -rf dist
+
           mkdir -p dist
 
-      # 14. Build signed iOS IPA
+      # 14. Build signed iOS application
       - name: Build iOS IPA
         run: |
+          set -o pipefail
+
           flet build ipa \
             --verbose \
+            --bundle-id "${{ secrets.IOS_BUNDLE_ID }}" \
             --ios-team-id "${{ secrets.IOS_TEAM_ID }}" \
             --ios-signing-certificate "Apple Distribution" \
-            --ios-provisioning-profile "${{ steps.profile.outputs.profile_name }}" \
-            --ios-export-method app-store-connect \
-            --build-number "${{ github.run_number }}"
+            --ios-provisioning-profile "${{ steps.profile.outputs.profile_uuid }}" \
+            --ios-export-method app-store-connect
 
-      # 15. Debug build output
-      - name: Debug iOS Build Output
+      # 15. Inspect Flet build output
+      - name: Inspect Flet Build Results
         if: always()
         run: |
           echo "===== BUILD DIRECTORY ====="
-          ls -lah build/ || true
 
-          echo "===== IPA FILES ====="
-          find build -type f -name "*.ipa" -print || true
+          find build -maxdepth 7 \
+            \( -name "*.ipa" -o -name "*.xcarchive" \) \
+            -print 2>/dev/null || true
 
-          echo "===== XCARCHIVE FILES ====="
-          find build -type d -name "*.xcarchive" -print || true
+          echo "===== IPA OUTPUT ====="
 
-      # 16. Verify IPA
+          find build -type f -name "*.ipa" \
+            -print 2>/dev/null || true
+
+          echo "===== ARCHIVE OUTPUT ====="
+
+          find build -type d -name "*.xcarchive" \
+            -print 2>/dev/null || true
+
+      # 16. Export IPA if Flet produced only an archive
+      - name: Export IPA from XCArchive
+        shell: bash
+        env:
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          PROFILE_NAME: ${{ steps.profile.outputs.profile_name }}
+        run: |
+          set -e
+
+          echo "Searching for IPA..."
+
+          IPA_PATH=$(find build -type f -name "*.ipa" \
+            -print -quit)
+
+          if [ -n "$IPA_PATH" ]; then
+            echo "Flet already generated an IPA."
+            cp "$IPA_PATH" dist/BCT_StudentPortal.ipa
+            exit 0
+          fi
+
+          echo "No IPA found. Searching for XCArchive..."
+
+          ARCHIVE_PATH=$(find build -type d \
+            -name "*.xcarchive" -print -quit)
+
+          if [ -z "$ARCHIVE_PATH" ]; then
+            echo "ERROR: Neither IPA nor XCArchive was generated."
+            exit 1
+          fi
+
+          echo "Archive found: $ARCHIVE_PATH"
+
+          # Create Xcode export options
+          python3 - <<'PY'
+          import os
+          import plistlib
+
+          options = {
+              "method": "app-store-connect",
+              "teamID": os.environ["IOS_TEAM_ID"],
+              "signingStyle": "manual",
+              "signingCertificate": "Apple Distribution",
+              "provisioningProfiles": {
+                  os.environ["IOS_BUNDLE_ID"]:
+                      os.environ["PROFILE_NAME"]
+              }
+          }
+
+          with open(
+              os.path.join(os.environ["RUNNER_TEMP"],
+                           "ExportOptions.plist"),
+              "wb"
+          ) as f:
+              plistlib.dump(options, f)
+          PY
+
+          # Export archive to IPA
+          mkdir -p "$RUNNER_TEMP/ipa-export"
+
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportPath "$RUNNER_TEMP/ipa-export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+
+          # Find exported IPA
+          IPA_PATH=$(find "$RUNNER_TEMP/ipa-export" \
+            -type f -name "*.ipa" -print -quit)
+
+          if [ -z "$IPA_PATH" ]; then
+            echo "ERROR: Xcode export did not generate an IPA."
+            find "$RUNNER_TEMP/ipa-export" -maxdepth 4 -print
+            exit 1
+          fi
+
+          cp "$IPA_PATH" dist/BCT_StudentPortal.ipa
+
+          echo "IPA export completed successfully."
+
+      # 17. Verify final IPA
       - name: Verify IPA
         shell: bash
         run: |
           set -e
 
-          echo "Searching for generated IPA..."
+          IPA="dist/BCT_StudentPortal.ipa"
 
-          IPA_PATH=$(find build -type f -name "*.ipa" -print -quit)
-
-          if [ -z "$IPA_PATH" ]; then
-            echo "ERROR: No IPA file was generated."
-            echo "Check the Xcode archive and export logs."
+          if [ ! -f "$IPA" ]; then
+            echo "ERROR: Final IPA does not exist."
             exit 1
           fi
 
-          echo "IPA generated successfully."
+          echo "===== IPA FILE ====="
+          ls -lh "$IPA"
 
-          cp "$IPA_PATH" dist/BCT_StudentPortal.ipa
+          echo "===== VERIFY ZIP ====="
+          unzip -t "$IPA"
 
-          ls -lh dist/BCT_StudentPortal.ipa
+          echo "===== VERIFY APP CONTENTS ====="
+          unzip -l "$IPA" | grep "Payload/" | head -20
 
-      # 17. Verify IPA package
-      - name: Verify IPA package
-        run: |
-          unzip -t dist/BCT_StudentPortal.ipa
+          echo "IPA verification completed."
 
       # 18. Upload IPA only
       - name: Upload iOS IPA
@@ -213,3 +333,15 @@ jobs:
           path: dist/BCT_StudentPortal.ipa
           if-no-files-found: error
           retention-days: 7
+
+      # 19. Upload diagnostic logs if build fails
+      - name: Upload diagnostic files
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BCT_StudentPortal-iOS-Diagnostics
+          path: |
+            build/ios/
+            build/flutter/build/ios/
+          if-no-files-found: ignore
+          retention-days: 3
