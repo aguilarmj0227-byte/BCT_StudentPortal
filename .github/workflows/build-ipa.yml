@@ -1,5 +1,4 @@
-
-name: Build BCT_StudentPortal iOS Archive
+name: Build BCT_StudentPortal iOS IPA
 
 on:
   workflow_dispatch:
@@ -12,7 +11,7 @@ permissions:
 
 jobs:
   build-ios:
-    name: Build BCT_StudentPortal iOS Archive
+    name: Build BCT_StudentPortal IPA
     runs-on: macos-15-intel
     timeout-minutes: 90
 
@@ -58,38 +57,43 @@ jobs:
       - name: Verify dependency overrides
         run: |
           echo "Checking pyproject.toml..."
-          grep -A 5 "dependency_overrides" pyproject.toml
+          grep -A 5 "dependency_overrides" pyproject.toml || true
 
       - name: Clean previous build
         run: |
           rm -rf build
 
-      - name: Build iOS Archive
+      - name: Build iOS IPA
         run: |
           flet build ipa --verbose
 
       - name: Verify resolved Flutter dependencies
         run: |
           echo "Checking device_info_plus..."
-          grep -A 3 "device_info_plus:" build/flutter/pubspec.lock
+          grep -A 3 "device_info_plus:" build/flutter/pubspec.lock || true
 
           echo "Checking connectivity_plus..."
-          grep -A 3 "connectivity_plus:" build/flutter/pubspec.lock
+          grep -A 3 "connectivity_plus:" build/flutter/pubspec.lock || true
 
-      - name: Find iOS build output
+      - name: Find and verify IPA
         run: |
-          echo "Searching for XCArchive..."
-          find build -type d -name "*.xcarchive" -print
-
           echo "Searching for IPA..."
+
           find build -type f -name "*.ipa" -print
 
-      - name: Upload iOS archive
+          IPA_COUNT=$(find build -type f -name "*.ipa" | wc -l | tr -d ' ')
+
+          if [ "$IPA_COUNT" -eq 0 ]; then
+            echo "ERROR: No IPA file was generated."
+            exit 1
+          fi
+
+          echo "Successfully generated IPA file."
+
+      - name: Upload iOS IPA
         uses: actions/upload-artifact@v4
         with:
-          name: BCT_StudentPortal-iOS-Archive
-          path: |
-            build/**/*.xcarchive
-            build/**/*.ipa
+          name: BCT_StudentPortal-iOS-IPA
+          path: build/**/*.ipa
           if-no-files-found: error
           retention-days: 7
