@@ -1,56 +1,135 @@
-name: Build iOS IPA (unsigned)
 
-# Run it by hand: repo > Actions tab > "Build iOS IPA (unsigned)" > Run workflow
+name: Build BCT_StudentPortal iOS IPA (Unsigned)
+
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build-ipa:
+    name: Build BCT_StudentPortal IPA
     runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 90
 
-      - uses: actions/setup-python@v5
+    steps:
+      # 1. Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # 3. Set up Flutter
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.44.8"
-          channel: "stable"
+          channel: stable
 
+      # 4. Install Flet
       - name: Install Flet
-        run: pip install "flet==1.0.4" "flet-cli==1.0.4"
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet==1.0.4" "flet-cli==1.0.4"
 
-      - name: Verify Flutter setup
-        run: flutter --version && flutter doctor -v
+      # 5. Verify environment
+      - name: Verify environment
+        run: |
+          python --version
+          flutter --version
+          flutter doctor -v
+          flet --version
 
-      # Builds the app without Apple code signing. 3uTools signs it later
-      # with your own Apple ID when you install it on the iPhone.
-      - name: Build iOS app (no code signing)
+      # 6. Build unsigned iOS application
+      - name: Build iOS app
         env:
           CI: "true"
-        run: flet build ipa --verbose --flutter-build-args=--no-codesign
-
-      - name: Show what was built
-        if: always()
-        run: find build -maxdepth 7 \( -name "*.app" -o -name "*.xcarchive" -o -name "*.ipa" \) | head -50
-
-      - name: Package an unsigned IPA
         run: |
-          set -e
-          APP=$(find build -type d -name "*.app" -not -path "*simulator*" -not -path "*Frameworks*" | head -n 1)
+          flet build ipa --verbose --flutter-build-args=--no-codesign
+
+      # 7. Inspect generated files
+      - name: Inspect build output
+        if: always()
+        run: |
+          echo "Searching for generated iOS files..."
+          find build -maxdepth 10 \
+            \( -name "*.app" -o -name "*.xcarchive" -o -name "*.ipa" \) \
+            -print || true
+
+      # 8. Package unsigned IPA
+      - name: Create unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Locating Xcode archive..."
+
+          ARCHIVE=$(find build -type d -name "*.xcarchive" -print -quit)
+
+          APP=""
+
+          if [ -n "$ARCHIVE" ]; then
+            echo "Found archive: $ARCHIVE"
+
+            APP=$(find "$ARCHIVE" \
+              -type d \
+              -path "*/Products/Applications/*.app" \
+              -print -quit)
+          fi
+
+          # Fallback: search for an app bundle directly
           if [ -z "$APP" ]; then
-            echo "No .app was produced - check the 'Build iOS app' step above."
+            echo "Searching for standalone iOS app..."
+
+            APP=$(find build \
+              -type d \
+              -name "*.app" \
+              -not -path "*simulator*" \
+              -not -path "*Frameworks/*" \
+              -print -quit)
+          fi
+
+          if [ -z "$APP" ]; then
+            echo "::error::No iOS .app bundle found."
+            echo "Check the generated .xcarchive and build logs."
             exit 1
           fi
-          echo "Packaging: $APP"
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          zip -qry BCT-Tuition-Calculator-unsigned.ipa Payload
 
-      - uses: actions/upload-artifact@v4
+          echo "Found iOS application:"
+          echo "$APP"
+
+          # Prepare IPA structure
+          rm -rf Payload
+          mkdir -p Payload
+
+          cp -R "$APP" Payload/
+
+          # Create unsigned IPA
+          zip -qry BCT_StudentPortal-unsigned.ipa Payload
+
+          # Verify IPA
+          if [ ! -s BCT_StudentPortal-unsigned.ipa ]; then
+            echo "::error::IPA packaging failed."
+            exit 1
+          fi
+
+          echo "Successfully created unsigned IPA."
+
+          ls -lh BCT_StudentPortal-unsigned.ipa
+
+      # 9. Upload IPA to GitHub Actions
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
         with:
-          name: BCT-Tuition-Calculator-unsigned-ipa
-          path: BCT-Tuition-Calculator-unsigned.ipa
+          name: BCT_StudentPortal-unsigned-IPA
+          path: BCT_StudentPortal-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
